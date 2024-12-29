@@ -14,8 +14,8 @@ app.secret_key = "your_secret_key"  # Change this to a random string
 app.permanent_session_lifetime = timedelta(minutes=30)
 
 # Admin credentials - change these!
-ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "admin123"
+ADMIN_USERNAME = "nayan_mishra"
+ADMIN_PASSWORD = "16097264"
 
 # Global variables
 datetoday = date.today().strftime("%m_%d_%y")
