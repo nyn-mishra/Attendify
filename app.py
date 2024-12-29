@@ -57,7 +57,8 @@ def train_model():
     userlist = os.listdir('static/faces')
     
     for user in userlist:
-        for imgname in os.listdir(f'static/faces/{user}'):
+        user_images = os.listdir(f'static/faces/{user}')
+        for imgname in user_images:
             img = cv2.imread(f'static/faces/{user}/{imgname}')
             face_encoding = get_face_encoding(img)
             if face_encoding is not None:
@@ -66,9 +67,10 @@ def train_model():
     
     if faces:
         faces = np.array(faces)
-        knn = KNeighborsClassifier(n_neighbors=5)
-        knn.fit(faces, labels)
-        joblib.dump(knn, 'static/face_recognition_model.pkl')
+        from sklearn.ensemble import RandomForestClassifier
+        clf = RandomForestClassifier(n_estimators=100)
+        clf.fit(faces, labels)
+        joblib.dump(clf, 'static/face_recognition_model.pkl')
         return True
     return False
 
@@ -91,8 +93,11 @@ def check_face_exists(frame):
         model = joblib.load('static/face_recognition_model.pkl')
         userlist = os.listdir('static/faces')
         if userlist:
-            pred = model.predict(face_encoding)[0]
-            return True
+            proba = model.predict_proba(face_encoding)
+            max_proba = np.max(proba)
+            
+            if max_proba > 0.7:
+                return True
     except:
         pass
     return False
@@ -155,7 +160,8 @@ def start_attendance():
             return redirect(url_for('home'))
 
         attendance_marked = False
-        max_attempts = 50  # Prevent infinite loop
+        already_marked_users = set()
+        max_attempts = 100  # Prevent infinite loop
         attempts = 0
 
         while not attendance_marked and attempts < max_attempts:
@@ -165,19 +171,21 @@ def start_attendance():
 
             identified_person = identify_face(frame)
             if identified_person:
-                if add_attendance(identified_person):
-                    flash('Attendance marked successfully!', 'success')
-                else:
-                    flash('Attendance already marked for today!', 'info')
-                attendance_marked = True
+                if identified_person not in already_marked_users:
+                    if add_attendance(identified_person):
+                        flash(f'Attendance marked for {identified_person}!', 'success')
+                        attendance_marked = True
+                    else:
+                        already_marked_users.add(identified_person)
+                        flash('Attendance already marked for this user today!', 'info')
             
             attempts += 1
 
         cap.release()
         cv2.destroyAllWindows()
 
-        if not attendance_marked:
-            flash('Face not recognized. Please register first!', 'error')
+        if not attendance_marked and already_marked_users:
+            flash('No new attendance could be marked', 'info')
     
     except Exception as e:
         flash(f'Error during attendance: {str(e)}', 'error')
@@ -220,12 +228,11 @@ def register():
             if not cap.isOpened():
                 flash('Unable to access camera!', 'error')
                 return redirect(url_for('register'))
-
-            face_detected = False
-            max_attempts = 50  # Prevent infinite loop
-            attempts = 0
-
-            while not face_detected and attempts < max_attempts:
+            
+            images_to_capture = 10
+            captured_images = 0
+            
+            while captured_images < images_to_capture:
                 ret, frame = cap.read()
                 if not ret:
                     break
@@ -241,33 +248,34 @@ def register():
 
                     (x, y, w, h) = faces[0]
                     face_img = frame[y:y+h, x:x+w]
-                    cv2.imwrite(f'{userimagefolder}/1.jpg', face_img)
-                    face_detected = True
-                
-                attempts += 1
+                    cv2.imwrite(f'{userimagefolder}/face_{captured_images}.jpg', face_img)
+                    captured_images += 1
+                    
+                    cv2.putText(frame, f'Capturing: {captured_images}/{images_to_capture}', 
+                                (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                    cv2.imshow('Capturing Face', frame)
+                    cv2.waitKey(500)  # Half-second delay between captures
 
             cap.release()
             cv2.destroyAllWindows()
 
-            if not face_detected:
+            if captured_images < images_to_capture:
                 shutil.rmtree(userimagefolder)
-                flash('No face detected. Please try again!', 'error')
+                flash('Not enough faces captured. Please try again!', 'error')
                 return redirect(url_for('register'))
-
+            # Train model with multiple images
             if train_model():
                 flash('Registration successful!', 'success')
             else:
                 shutil.rmtree(userimagefolder)
                 flash('Error training model. Please try again!', 'error')
-
+                      
         except Exception as e:
             if os.path.exists(userimagefolder):
-                shutil.rmtree(userimagefolder)
+                shutil.rmtree(userimagefolde)
             flash(f'Error during registration: {str(e)}', 'error')
             return redirect(url_for('register'))
-
         return redirect(url_for('home'))
-
     return render_template('register.html')
 
 @app.route('/admin', methods=['GET', 'POST'])
