@@ -1,3 +1,4 @@
+<!-- home.html -->
 <!DOCTYPE html>
 <html>
 <head>
@@ -23,6 +24,7 @@
             </div>
         </div>
     </nav>
+
     <div class="container mx-auto px-4">
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
@@ -33,7 +35,8 @@
                 {% endfor %}
             {% endif %}
         {% endwith %}
-        
+
+        {% if not is_admin %}
         <div class="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
             <div class="bg-white rounded-lg shadow p-6">
                 <h2 class="text-xl font-bold mb-4">Take Attendance</h2>
@@ -48,6 +51,7 @@
                 </a>
             </div>
         </div>
+        {% endif %}
 
         {% if is_admin and registered_users %}
         <div class="bg-white rounded-lg shadow p-6 mb-8">
@@ -67,7 +71,7 @@
                             <td class="px-6 py-4 whitespace-nowrap">{{ user.username }}</td>
                             <td class="px-6 py-4 whitespace-nowrap">{{ user.userid }}</td>
                             <td class="px-6 py-4 whitespace-nowrap">
-                                <a href="{{ url_for('remove_user', userid=user.userid) }}" 
+                                <a href="{{ url_for('remove_user', userid=user.userid) }}"
                                    class="text-red-600 hover:text-red-900"
                                    onclick="return confirm('Are you sure you want to remove this user?')">
                                     Remove User
@@ -82,7 +86,7 @@
         {% endif %}
 
         <div class="bg-white rounded-lg shadow p-6">
-            <h2 class="text-xl font-bold mb-4">Today's Attendance ({{ datetoday2 }})</h2>
+                <h2 class="text-xl font-bold mb-4">Today's Attendance ({{ datetoday2 }})</h2>
             <div class="overflow-x-auto">
                 <table class="min-w-full table-auto">
                     <thead class="bg-gray-50">

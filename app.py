@@ -1,5 +1,6 @@
+# app.py
 import os
-from flask import Flask, request, render_template, redirect, url_for, session, flash, jsonify, Response
+from flask import Flask, request, render_template, redirect, url_for, session, flash, jsonify
 from datetime import date, datetime, timedelta
 import cv2
 import numpy as np
@@ -9,96 +10,108 @@ import joblib
 import shutil
 
 app = Flask(__name__)
-app.secret_key = "your_secret_key"
+app.secret_key = "your_secret_key"  # Change this to a random string
 app.permanent_session_lifetime = timedelta(minutes=30)
 
+# Admin credentials - change these!
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "admin123"
 
+# Global variables
 datetoday = date.today().strftime("%m_%d_%y")
 datetoday2 = date.today().strftime("%d-%B-%Y")
-face_detector = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
-camera = None
 
-# Initialize directories and files
+# Initialize face detector
+face_detector = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+
+# Initialize directories
 if not os.path.isdir('Attendance'):
     os.makedirs('Attendance')
 if not os.path.isdir('static/faces'):
     os.makedirs('static/faces')
-if f'Attendance-{datetoday}.csv' not in os.listdir('Attendance'):
-    with open(f'Attendance/Attendance-{datetoday}.csv', 'w') as f:
-        f.write('Name,Roll,Time,Active')
 
-def check_user_exists(username, userid):
-    if not os.path.exists('static/faces'):
-        return False
-    for user_folder in os.listdir('static/faces'):
-        existing_username = user_folder.split('_')[0]
-        existing_userid = user_folder.split('_')[1]
-        if username == existing_username or userid == existing_userid:
-            return True
-    return False
-
-def generate_frames():
-    global camera
-    while True:
-        success, frame = camera.read()
-        if not success:
-            break
-        else:
-            ret, buffer = cv2.imencode('.jpg', frame)
-            frame = buffer.tobytes()
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-
-@app.route('/video_feed')
-def video_feed():
-    return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+def initialize_attendance():
+    attendance_file = f'Attendance/Attendance-{datetoday}.csv'
+    if not os.path.exists(attendance_file):
+        with open(attendance_file, 'w') as f:
+            f.write('Name,Roll,Time')
 
 def extract_faces(img):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     face_points = face_detector.detectMultiScale(gray, 1.3, 5)
     return face_points
 
-def identify_face(facearray):
-    try:
-        model = joblib.load('static/face_recognition_model.pkl')
-        return model.predict(facearray)
-    except:
-        return None
+def get_face_encoding(img):
+    faces = extract_faces(img)
+    if len(faces) > 0:
+        (x, y, w, h) = faces[0]
+        face_img = img[y:y+h, x:x+w]
+        face_img = cv2.resize(face_img, (50, 50))
+        face_img = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
+        return face_img.reshape(1, -1)
+    return None
 
 def train_model():
     faces = []
     labels = []
     userlist = os.listdir('static/faces')
+    
     for user in userlist:
         for imgname in os.listdir(f'static/faces/{user}'):
             img = cv2.imread(f'static/faces/{user}/{imgname}')
-            resized_face = cv2.resize(img, (50, 50))
-            faces.append(resized_face.ravel())
-            labels.append(user)
+            face_encoding = get_face_encoding(img)
+            if face_encoding is not None:
+                faces.append(face_encoding[0])
+                labels.append(user)
+    
     if faces:
         faces = np.array(faces)
         knn = KNeighborsClassifier(n_neighbors=5)
         knn.fit(faces, labels)
         joblib.dump(knn, 'static/face_recognition_model.pkl')
+        return True
+    return False
+
+def identify_face(frame):
+    face_encoding = get_face_encoding(frame)
+    if face_encoding is not None:
+        try:
+            model = joblib.load('static/face_recognition_model.pkl')
+            return model.predict(face_encoding)[0]
+        except:
+            return None
+    return None
+
+def check_face_exists(frame):
+    face_encoding = get_face_encoding(frame)
+    if face_encoding is None:
+        return False
+    
+    try:
+        model = joblib.load('static/face_recognition_model.pkl')
+        userlist = os.listdir('static/faces')
+        if userlist:
+            pred = model.predict(face_encoding)[0]
+            return True
+    except:
+        pass
+    return False
 
 def get_registered_users():
     users = []
-    if os.path.exists('static/faces'):
-        for user_folder in os.listdir('static/faces'):
-            username = user_folder.split('_')[0]
-            userid = user_folder.split('_')[1]
-            users.append({'username': username, 'userid': userid})
+    for user_folder in os.listdir('static/faces'):
+        username = user_folder.split('_')[0]
+        userid = user_folder.split('_')[1]
+        users.append({'username': username, 'userid': userid})
     return users
 
 def extract_attendance():
+    initialize_attendance()
     df = pd.read_csv(f'Attendance/Attendance-{datetoday}.csv')
-    active_records = df[df['Active'] == 1]
-    names = active_records['Name']
-    rolls = active_records['Roll']
-    times = active_records['Time']
-    l = len(active_records)
+    names = df['Name']
+    rolls = df['Roll']
+    times = df['Time']
+    l = len(df)
     return names, rolls, times, l
 
 def add_attendance(name):
@@ -106,10 +119,12 @@ def add_attendance(name):
     userid = name.split('_')[1]
     current_time = datetime.now().strftime("%H:%M:%S")
     
+    initialize_attendance()
     df = pd.read_csv(f'Attendance/Attendance-{datetoday}.csv')
-    if int(userid) not in list(df[df['Active'] == 1]['Roll']):
+    
+    if int(userid) not in list(df['Roll']):
         with open(f'Attendance/Attendance-{datetoday}.csv', 'a') as f:
-            f.write(f'\n{username},{userid},{current_time},1')
+            f.write(f'\n{username},{userid},{current_time}')
         return True
     return False
 
@@ -117,138 +132,148 @@ def add_attendance(name):
 def home():
     names, rolls, times, l = extract_attendance()
     registered_users = get_registered_users() if session.get('admin', False) else []
-    return render_template('home.html', 
-                         names=names, 
-                         rolls=rolls, 
-                         times=times, 
+    return render_template('home.html',
+                         names=names,
+                         rolls=rolls,
+                         times=times,
                          l=l,
                          datetoday2=datetoday2,
-                         totalreg=len(os.listdir('static/faces')) if os.path.exists('static/faces') else 0,
+                         totalreg=len(os.listdir('static/faces')),
                          is_admin=session.get('admin', False),
                          registered_users=registered_users)
 
-@app.route('/start_camera')
-def start_camera():
-    global camera
-    camera = cv2.VideoCapture(0)
-    return redirect(url_for('take_attendance'))
-
-@app.route('/take_attendance')
-def take_attendance():
-    if 'face_recognition_model.pkl' not in os.listdir('static'):
+@app.route('/start_attendance')
+def start_attendance():
+    if not os.listdir('static/faces'):
         flash('No registered users found. Please register first!', 'error')
         return redirect(url_for('home'))
-    return render_template('attendance.html')
 
-@app.route('/process_attendance')
-def process_attendance():
-    global camera
-    if camera is None:
-        return jsonify({'status': 'error', 'message': 'Camera not initialized'})
+    try:
+        cap = cv2.VideoCapture(0)
+        if not cap.isOpened():
+            flash('Unable to access camera!', 'error')
+            return redirect(url_for('home'))
+
+        attendance_marked = False
+        max_attempts = 50  # Prevent infinite loop
+        attempts = 0
+
+        while not attendance_marked and attempts < max_attempts:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            identified_person = identify_face(frame)
+            if identified_person:
+                if add_attendance(identified_person):
+                    flash('Attendance marked successfully!', 'success')
+                else:
+                    flash('Attendance already marked for today!', 'info')
+                attendance_marked = True
+            
+            attempts += 1
+
+        cap.release()
+        cv2.destroyAllWindows()
+
+        if not attendance_marked:
+            flash('Face not recognized. Please register first!', 'error')
     
-    ret, frame = camera.read()
-    if not ret:
-        return jsonify({'status': 'error', 'message': 'Failed to capture image'})
-        
-    faces = extract_faces(frame)
-    if len(faces) > 0:
-        (x, y, w, h) = faces[0]
-        face = cv2.resize(frame[y:y+h, x:x+w], (50, 50))
-        identified_person = identify_face(face.reshape(1, -1))
-        
-        if identified_person is not None:
-            if add_attendance(identified_person[0]):
-                camera.release()
-                camera = None
-                return jsonify({'status': 'success', 'message': 'Attendance marked successfully!'})
-            else:
-                camera.release()
-                camera = None
-                return jsonify({'status': 'info', 'message': 'Attendance already marked for today!'})
-        else:
-            camera.release()
-            camera = None
-            return jsonify({'status': 'error', 'message': 'User not registered. Please register first!'})
+    except Exception as e:
+        flash(f'Error during attendance: {str(e)}', 'error')
     
-    return jsonify({'status': 'continue'})
+    return redirect(url_for('home'))
 
 @app.route('/check_registration', methods=['POST'])
 def check_registration():
     username = request.form.get('username')
     userid = request.form.get('userid')
-    if check_user_exists(username, userid):
-        return jsonify({'exists': True})
+    
+    # Check if username or userid exists
+    for user_folder in os.listdir('static/faces'):
+        existing_username = user_folder.split('_')[0]
+        existing_userid = user_folder.split('_')[1]
+        if username == existing_username or userid == existing_userid:
+            return jsonify({'exists': True, 'message': 'Username or User ID already exists!'})
+    
     return jsonify({'exists': False})
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
-    global camera
     if request.method == 'POST':
         username = request.form['username']
         userid = request.form['userid']
         
-        if check_user_exists(username, userid):
-            flash('Username or User ID already exists!', 'error')
-            return redirect(url_for('register'))
-        
-        userimagefolder = f'static/faces/{username}_{userid}'
-        os.makedirs(userimagefolder)
-        
-        camera = cv2.VideoCapture(0)
-        i = 0
-        while i < 5:
-            ret, frame = camera.read()
-            if not ret:
-                break
-                
-            faces = extract_faces(frame)
-            if len(faces) > 0:
-                (x, y, w, h) = faces[0]
-                cv2.imwrite(f'{userimagefolder}/{i}.jpg', frame[y:y+h, x:x+w])
-                i += 1
-                
-        camera.release()
-        camera = None
-        
-        train_model()
-        flash('Registration successful!', 'success')
-        return redirect(url_for('home'))
-        
-    return render_template('register.html')
+        # Check if user already exists
+        for user_folder in os.listdir('static/faces'):
+            existing_username = user_folder.split('_')[0]
+            existing_userid = user_folder.split('_')[1]
+            if username == existing_username or userid == existing_userid:
+                flash('Username or User ID already exists!', 'error')
+                return redirect(url_for('register'))
 
-@app.route('/remove_user/<userid>')
-def remove_user(userid):
-    if not session.get('admin', False):
-        flash('Unauthorized access!', 'error')
-        return redirect(url_for('home'))
-    
-    # Remove user's face data
-    for user_folder in os.listdir('static/faces'):
-        if user_folder.split('_')[1] == userid:
-            shutil.rmtree(f'static/faces/{user_folder}')
-            
-            # Deactivate user's attendance records
-            df = pd.read_csv(f'Attendance/Attendance-{datetoday}.csv')
-            df.loc[df['Roll'] == int(userid), 'Active'] = 0
-            df.to_csv(f'Attendance/Attendance-{datetoday}.csv', index=False)
-            
-            # Retrain model if there are still users
-            if len(os.listdir('static/faces')) > 0:
-                train_model()
+        try:
+            userimagefolder = f'static/faces/{username}_{userid}'
+            os.makedirs(userimagefolder)
+
+            cap = cv2.VideoCapture(0)
+            if not cap.isOpened():
+                flash('Unable to access camera!', 'error')
+                return redirect(url_for('register'))
+
+            face_detected = False
+            max_attempts = 50  # Prevent infinite loop
+            attempts = 0
+
+            while not face_detected and attempts < max_attempts:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+
+                faces = extract_faces(frame)
+                if len(faces) > 0:
+                    if check_face_exists(frame):
+                        shutil.rmtree(userimagefolder)
+                        cap.release()
+                        cv2.destroyAllWindows()
+                        flash('Face already registered with another user!', 'error')
+                        return redirect(url_for('register'))
+
+                    (x, y, w, h) = faces[0]
+                    face_img = frame[y:y+h, x:x+w]
+                    cv2.imwrite(f'{userimagefolder}/1.jpg', face_img)
+                    face_detected = True
+                
+                attempts += 1
+
+            cap.release()
+            cv2.destroyAllWindows()
+
+            if not face_detected:
+                shutil.rmtree(userimagefolder)
+                flash('No face detected. Please try again!', 'error')
+                return redirect(url_for('register'))
+
+            if train_model():
+                flash('Registration successful!', 'success')
             else:
-                if os.path.exists('static/face_recognition_model.pkl'):
-                    os.remove('static/face_recognition_model.pkl')
-                    
-            flash('User removed successfully!', 'success')
-            return redirect(url_for('home'))
-            
-    flash('User not found!', 'error')
-    return redirect(url_for('home'))
+                shutil.rmtree(userimagefolder)
+                flash('Error training model. Please try again!', 'error')
+
+        except Exception as e:
+            if os.path.exists(userimagefolder):
+                shutil.rmtree(userimagefolder)
+            flash(f'Error during registration: {str(e)}', 'error')
+            return redirect(url_for('register'))
+
+        return redirect(url_for('home'))
+
+    return render_template('register.html')
 
 @app.route('/admin', methods=['GET', 'POST'])
 def admin():
     if request.method == 'POST':
-        if (request.form['username'] == ADMIN_USERNAME and 
+        if (request.form['username'] == ADMIN_USERNAME and
             request.form['password'] == ADMIN_PASSWORD):
             session['admin'] = True
             flash('Successfully logged in!', 'success')
@@ -260,6 +285,41 @@ def admin():
 @app.route('/logout')
 def logout():
     session.pop('admin', None)
+    return redirect(url_for('home'))
+
+@app.route('/remove_user/<userid>')
+def remove_user(userid):
+    if not session.get('admin', False):
+        flash('Unauthorized access!', 'error')
+        return redirect(url_for('home'))
+
+    try:
+        # Remove user's face data
+        for user_folder in os.listdir('static/faces'):
+            if user_folder.split('_')[1] == userid:
+                shutil.rmtree(f'static/faces/{user_folder}')
+                
+                # Remove user's attendance records
+                for attendance_file in os.listdir('Attendance'):
+                    file_path = f'Attendance/{attendance_file}'
+                    if os.path.isfile(file_path):
+                        df = pd.read_csv(file_path)
+                        df = df[df['Roll'] != int(userid)]
+                        df.to_csv(file_path, index=False)
+                
+                # Retrain model if there are remaining users
+                if os.listdir('static/faces'):
+                    train_model()
+                elif os.path.exists('static/face_recognition_model.pkl'):
+                    os.remove('static/face_recognition_model.pkl')
+                
+                flash('User removed successfully!', 'success')
+                return redirect(url_for('home'))
+
+        flash('User not found!', 'error')
+    except Exception as e:
+        flash(f'Error removing user: {str(e)}', 'error')
+    
     return redirect(url_for('home'))
 
 if __name__ == '__main__':

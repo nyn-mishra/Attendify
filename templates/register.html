@@ -7,8 +7,21 @@
 <body class="bg-gray-100">
     <div class="min-h-screen flex items-center justify-center">
         <div class="max-w-md w-full bg-white rounded-lg shadow-lg p-8">
+            <div class="mb-4">
+                <a href="{{ url_for('home') }}" class="text-blue-500 hover:text-blue-700">← Back to Home</a>
+            </div>
             <h2 class="text-2xl font-bold text-center mb-8">Register New User</h2>
-            
+
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div class="{% if category == 'error' %}bg-red-100 border-red-400 text-red-700{% else %}bg-green-100 border-green-400 text-green-700{% endif %} px-4 py-3 rounded relative mb-4">
+                            {{ message }}
+                        </div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+
             <form method="POST" id="registerForm">
                 <div class="mb-4">
                     <label class="block text-gray-700 text-sm font-bold mb-2" for="username">
@@ -25,12 +38,44 @@
                            id="userid" name="userid" type="text" required>
                 </div>
                 <div id="userExistsMessage" class="mb-4 hidden text-red-500"></div>
+                <div id="registrationStatus" class="mb-4 hidden"></div>
                 <div class="flex items-center justify-between">
                     <button type="submit" class="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline w-full">
                         Register & Start Camera
                     </button>
                 </div>
             </form>
-            
-            <div class="mt-4 text-center">
-                <a href="{{ url_for('home') }}" class="text-blue-500 hover:text-blue-700">Back to Home</a>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('registerForm').addEventListener('input', function(e) {
+            if (e.target.id === 'username' || e.target.id === 'userid') {
+                const username = document.getElementById('username').value;
+                const userid = document.getElementById('userid').value;
+                
+                if (username && userid) {
+                    const formData = new FormData();
+                    formData.append('username', username);
+                    formData.append('userid', userid);
+                    
+                    fetch('/check_registration', {
+                        method: 'POST',
+                        body: formData
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        const messageDiv = document.getElementById('userExistsMessage');
+                        if (data.exists) {
+                            messageDiv.textContent = data.message;
+                            messageDiv.classList.remove('hidden');
+                        } else {
+                            messageDiv.classList.add('hidden');
+                        }
+                    });
+                }
+            }
+        });
+    </script>
+</body>
+</html>
